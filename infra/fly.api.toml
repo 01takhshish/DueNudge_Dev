@@ -1,0 +1,44 @@
+# fly.io config for the API + worker. `flyctl launch --copy-config --config infra/fly.api.toml`
+# Secrets (set once): flyctl secrets set DATABASE_URL=... DATABASE_APP_URL=... REDIS_URL=... JWT_SECRET=... STRIPE_SECRET_KEY=... STRIPE_WEBHOOK_SECRET=... RESEND_API_KEY=... ANTHROPIC_API_KEY=...
+app = "duenudge-api"
+primary_region = "iad"
+
+[build]
+  dockerfile = "backend/Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  API_PORT = "4000"
+  COOKIE_SECURE = "true"
+  LOG_LEVEL = "info"
+
+[deploy]
+  release_command = "node dist/db/migrate.js"
+
+[processes]
+  api = "node dist/server.js"
+  worker = "node dist/worker.js"
+
+[http_service]
+  processes = ["api"]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = "off"
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "3s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/ready"
+
+[[vm]]
+  processes = ["api"]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[[vm]]
+  processes = ["worker"]
+  size = "shared-cpu-1x"
+  memory = "512mb"

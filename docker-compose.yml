@@ -1,0 +1,102 @@
+# Local development stack. `docker compose up -d postgres redis mailpit` for infra only,
+# or `docker compose up --build` to run everything in containers.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: duenudge
+    ports:
+      - '${POSTGRES_HOST_PORT:-5433}:5432' # 5433 on the host so it never clashes with a local Postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d duenudge']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--maxmemory-policy', 'noeviction']
+    ports:
+      - '${REDIS_HOST_PORT:-6379}:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - '8025:8025' # web UI — every email the app sends in dev lands here
+      - '1025:1025' # SMTP
+
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ['node', 'dist/db/migrate.js']
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/duenudge
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ['full']
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/duenudge
+      DATABASE_APP_URL: postgres://duenudge_app:app_password@postgres:5432/duenudge
+      REDIS_URL: redis://redis:6379
+      SMTP_URL: smtp://mailpit:1025
+      API_PORT: 4000
+    ports:
+      - '4000:4000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    profiles: ['full']
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ['node', 'dist/worker.js']
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/duenudge
+      DATABASE_APP_URL: postgres://duenudge_app:app_password@postgres:5432/duenudge
+      REDIS_URL: redis://redis:6379
+      SMTP_URL: smtp://mailpit:1025
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    profiles: ['full']
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    env_file: .env
+    environment:
+      API_URL: http://api:4000
+    ports:
+      - '3000:3000'
+    depends_on:
+      - api
+    profiles: ['full']
+
+volumes:
+  pgdata:
